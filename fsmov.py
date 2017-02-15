@@ -316,7 +316,7 @@ if __name__ == "__main__":
         # require at least 1 argument
         error_exit(
             "Please include the path to the directory to scan! Usage:\n"
-            "  python %s /Path/to/directory/to/scan" % __file__)
+            "  python %s /path/to/directory/to/scan" % __file__)
         exit(2)
 
     if not ffprobe_path:
