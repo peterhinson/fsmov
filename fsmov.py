@@ -28,10 +28,14 @@ include_ext   = (                   # File types to match
     '.r3d'
 #    '.dat'
 )
-copy_results  = True                # Whether to copy to clipboard afterwards (will overwrite clipboard!)
-csv_file_name = 'scan_output.csv'   # Output file
-use_threads   = True                # Whether to use threading (might prevent exiting the program until completion)
-thread_count  = 8                   # Number of threads. Ideally matches the number of CPU cores (4-16)
+
+csv_file_name   = 'scan_output.csv'   # Output file
+frame_grab_dir  = 'frames'            # Frame extraction directory
+frame_size      = '480x300'           # Frame size
+prefix_num_dirs = 2                   # Number of directory names to prefix frame file with
+copy_results    = True                # Whether to copy to clipboard afterwards (will overwrite clipboard!)
+use_threads     = True                # Whether to use threading (might prevent exiting the program until completion)
+thread_count    = 8                   # Number of threads. Ideally matches the number of CPU cores (4-16)
 
 
 ################################################################################
@@ -259,13 +263,98 @@ def get_video_metadata(path_to_video_file):
             seconds
         )
 
+        try:
+            # frame grab
+            parts = os.path.split(path_to_video_file)
+            prefix = '_'.join(parts[0].split('/')[-prefix_num_dirs:])
+            image_file_name = "%s/%s_%s.jpg" % (frame_grab_dir,
+                                                prefix,
+                                                parts[1])
+
+            cmd = "%s -ss %i -i %s -vframes 1 -s %s -y -f image2" % (ffmpeg_path,
+                                                                  round(rounded_duration / 2),
+                                                                  path_to_video_file.replace(' ', '\ '),
+                                                                  frame_size)
+            args = shlex.split(cmd)
+            args.append(image_file_name)
+            print(cmd)
+            # run the ffprobe process, decode stdout into utf-8 & convert to JSON
+            ffprobe_output = subprocess.check_output(args).decode('utf-8')
+            print(ffprobe_output)
+        except Exception as e:
+            error_list.append("--Error, possible corrupt: %s - %s" % (path_to_video_file, str(e)))
+            results['error'] = str(e)
+
+        # print(results)
+    except Exception as e:
+        error_list.append("--Error, possible corrupt: %s - %s" % (path_to_video_file, str(e)))
+        results['error'] = str(e)
+
+
+    return results
+
+# Function to extract the metadata of the input video file using ffprobe (ffmpeg)
+def get_video_frame(path_to_video_file):
+    results = defaultdict(str)
+
+    file_stat = os.stat(path_to_video_file)
+    results['size'] = get_human_readable_size(file_stat.st_size, 2)
+    results['creation_date'] = time.ctime(file_stat.st_ctime)
+
+    try:
+        # Use ffprobe to get metadata
+
+        parts = os.path.split(path_to_video_file)
+        image_file_name = "%s/%s_%s.jpg" % (frame_grab_dir,
+                                            os.path.basename(parts[0]), parts[1])
+
+        cmd = "%s -ss 125 -i %i -vframe 1 -s 480x300 -f image2 %s" % (ffmpeg_path, round(rounded_duration/2), image_file_name)
+        args = shlex.split(cmd)
+        args.append(path_to_video_file)
+
+        # run the ffprobe process, decode stdout into utf-8 & convert to JSON
+        ffprobe_output = subprocess.check_output(args).decode('utf-8')
+        ffprobe_output = json.loads(ffprobe_output)
+
+    except Exception as e:
+        # ffprobe error, probably an unsupported codec
+        error_list.append("--Unable to read %s" % path_to_video_file + str(e))
+        results['error'] = str(e)
+        return results
+
+    try:
+        # uncomment to see all the metadata available (fps, bitrate, etc):
+        # import pprint
+        # pp = pprint.PrettyPrinter(indent=2)
+        # pp.pprint(ffprobe_output)
+
+        # Get size and duration
+        duration = float(ffprobe_output['streams'][0]['duration'])
+        rounded_duration = int(round(duration))
+
+        results['width-height'] = "%sx%s" % (
+            ffprobe_output['streams'][0]['width'],
+            ffprobe_output['streams'][0]['height']
+        )
+
+        # Extract the time (from duration seconds)
+        seconds = int(rounded_duration) % 60
+        minutes = int(rounded_duration / 60.0) % 60
+        hours   = int(rounded_duration / (60.0 * 60.0))
+
+        results['duration'] = "%02i:%02i:%02i" % (
+            hours,
+            minutes,
+            seconds
+        )
+
         # print(results)
     except Exception as e:
         error_list.append("--Error, possible corrupt: %s - %s" % (path_to_video_file, str(e)))
         results['error'] = str(e)
 
     return results
-
+#  ffmpeg -ss 125 -i %s -vframe 1 -s 480x300 -f image2 %s/%s
 
 # Convert bytes to human readable format
 def get_human_readable_size(size, precision=2):
@@ -305,6 +394,7 @@ def which(program):
 
 
 ffprobe_path = which("ffprobe")
+ffmpeg_path  = which("ffmpeg")
 
 
 ################################################################################
@@ -330,6 +420,11 @@ if __name__ == "__main__":
             "\nSee: https://trac.ffmpeg.org/wiki/CompilationGuide/MacOSX#ffmpegthroughHomebrew\n"
             "(make sure installing homebrew is ok with company policies)")
 
+    if not os.path.isabs(frame_grab_dir):
+        frame_grab_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), frame_grab_dir)
+
+    if not os.path.exists(frame_grab_dir):
+        os.mkdir(frame_grab_dir)
     original_sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     pool = ThreadPool(thread_count)
